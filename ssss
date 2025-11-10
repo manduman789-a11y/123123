@@ -1,0 +1,141 @@
+<script>
+/**************** 설정 ****************/
+const SUPABASE_URL = 'https://ahtrczqyoakxrlgqgqom.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFodHJjenF5b2FreHJsZ3FncW9tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NDc5NzEsImV4cCI6MjA3ODMyMzk3MX0.3oMNLnUK9-N52Mmb5-264sk7RXSqaFHg2jQMggLWhsQ';               
+let CURRENT_POLL_ID = null; // 👈 새로 추가: 동적 투표 ID를 저장할 변수 (하드코딩된 POLL_ID 대체)
+const OPTIONS = ['월','화','수','목','금','토','일'];
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/**************** 로컬 세션 ****************/
+const LS_USER_ID = 'namedvote.user_id';
+const LS_CLIENT_ID = 'namedvote.client_id';
+function getClientId(){ let id = localStorage.getItem(LS_CLIENT_ID); if(!id){ id = (crypto?.randomUUID?.() || Math.random().toString(36).slice(2)); localStorage.setItem(LS_CLIENT_ID, id);} return id; }
+function getUserId(){ return localStorage.getItem(LS_USER_ID); }
+function setUserId(id){ localStorage.setItem(LS_USER_ID, id); }
+function clearLocal(){ localStorage.removeItem(LS_USER_ID); }
+
+/**************** DOM 헬퍼 ****************/
+const $ = (s)=>document.querySelector(s);
+function show(id, on=true){ const el = $(id); if(el) el.hidden = !on; }
+
+/**************** 초기 UI ****************/
+async function boot(){
+  // 1. 투표 메타 데이터 (현재 투표 ID)를 먼저 가져옵니다. 👈 중요 수정 부분
+  const { data: meta, error: metaError } = await sb.from('poll_meta').select('current_poll_id').eq('id', 1).maybeSingle();
+  if(metaError || !meta){
+      console.error('투표 메타 데이터 로드 오류: ', metaError);
+      alert('투표 메타 데이터 로드 오류. Supabase 설정을 확인하세요.');
+      return;
+  }
+  CURRENT_POLL_ID = meta.current_poll_id; // 전역 변수 업데이트
+  
+  // 2. 이후 기존 로그인 로직 실행
+  const userId = getUserId();
+  if(!userId){ show('#signup-card', true); show('#profile-card', false); show('#vote-card', false); }
+  else {
+    // 프로필 로드
+    const { data, error } = await sb.from('users').select('id, name').eq('id', userId).maybeSingle();
+    if(error || !data){ clearLocal(); return boot(); }
+    $('#myname').value = data.name;
+    show('#signup-card', false); show('#profile-card', true); show('#vote-card', true);
+    initVoteUI();
+  }
+}
+
+/**************** 가입/프로필 ****************/
+$('#signup').addEventListener('click', async ()=>{
+  const name = $('#name').value.trim(); if(!name) return alert('이름을 입력하세요.');
+  const clientId = getClientId();
+  // 같은 기기에서 중복 가입 방지(앱 로직)
+  const { data: exist } = await sb.from('users').select('id').eq('client_id', clientId).limit(1);
+  if(exist && exist.length){ alert('이미 이 기기에서 가입되었습니다.'); return; }
+  const { data, error } = await sb.from('users').insert({ name, client_id: clientId }).select('id').maybeSingle();
+  if(error) return alert('가입 오류: '+error.message);
+  setUserId(data.id);
+  await boot();
+});
+
+$('#save-name').addEventListener('click', async ()=>{
+  const id = getUserId(); if(!id) return;
+  const name = $('#myname').value.trim(); if(!name) return alert('이름을 입력하세요.');
+  const { error } = await sb.from('users').update({ name }).eq('id', id);
+  if(error) return alert('저장 오류: '+error.message);
+  alert('저장되었습니다.');
+  await renderResults();
+});
+
+$('#logout').addEventListener('click', async ()=>{ clearLocal(); location.reload(); });
+
+/**************** 투표 UI/로직 ****************/
+function initVoteUI(){
+  const optionsWrap = $('#options'); optionsWrap.innerHTML='';
+  OPTIONS.forEach((label, idx)=>{
+    const id = `opt-${idx}`;
+    const row = document.createElement('label'); row.className='option'; row.setAttribute('for', id);
+    row.innerHTML = `<input type="checkbox" id="${id}" value="${idx}" /><span>${label}</span>`;
+    optionsWrap.appendChild(row);
+  });
+  $('#vote-form').addEventListener('submit', onSubmit, { once:true });
+  $('#refresh').addEventListener('click', renderResults);
+  preloadMyChoices();
+  renderResults();
+}
+
+async function preloadMyChoices(){
+  const uid = getUserId(); if(!uid) return;
+  // 🚨 POLL_ID -> CURRENT_POLL_ID 수정
+  const { data, error } = await sb.from('votes').select('option_index').eq('poll_id', CURRENT_POLL_ID).eq('user_id', uid);
+  if(error) return;
+  const set = new Set((data||[]).map(r=>r.option_index));
+  OPTIONS.forEach((_, idx)=>{ const el = document.getElementById(`opt-${idx}`); if(el) el.checked = set.has(idx); });
+}
+
+async function onSubmit(e){
+  e.preventDefault();
+  const selected = Array.from(document.querySelectorAll('#options input[type=checkbox]:checked')).map(el=>Number(el.value));
+  if(!selected.length){ alert('최소 1개 이상 선택하세요.'); $('#vote-form').addEventListener('submit', onSubmit, { once:true }); return; }
+  const uid = getUserId(); if(!uid) return alert('가입이 필요합니다.');
+  // 기존 표 삭제 후 재삽입 (🚨 POLL_ID -> CURRENT_POLL_ID 수정)
+  let { error: e1 } = await sb.from('votes').delete().eq('poll_id', CURRENT_POLL_ID).eq('user_id', uid);
+  if(e1){ alert('초기화 오류: '+e1.message); $('#vote-form').addEventListener('submit', onSubmit, { once:true }); return; }
+  // 🚨 POLL_ID -> CURRENT_POLL_ID 수정
+  const rows = selected.map(i=>({ poll_id: CURRENT_POLL_ID, option_index: i, user_id: uid }));
+  let { error: e2 } = await sb.from('votes').insert(rows);
+  if(e2){ alert('저장 오류: '+e2.message); $('#vote-form').addEventListener('submit', onSubmit, { once:true }); return; }
+  alert('반영되었습니다.');
+  await renderResults();
+  $('#vote-form').addEventListener('submit', onSubmit, { once:true });
+}
+
+async function renderResults(){
+  const uid = getUserId();
+  const [agg, named] = await Promise.all([
+    // 🚨 POLL_ID -> CURRENT_POLL_ID 수정
+    sb.from('votes_agg').select('option_index, count').eq('poll_id', CURRENT_POLL_ID),
+    // 🚨 POLL_ID -> CURRENT_POLL_ID 수정
+    sb.from('votes_named').select('option_index, name, user_id').eq('poll_id', CURRENT_POLL_ID)
+  ]);
+  const counts = Array(OPTIONS.length).fill(0);
+  if(agg.data){ for(const r of agg.data){ if(r.option_index>=0 && r.option_index<counts.length) counts[r.option_index]=r.count; } }
+  const total = counts.reduce((a,b)=>a+b,0);
+
+  const byOpt = Array.from({length:OPTIONS.length},()=>[]);
+  if(named.data){ for(const r of named.data){ if(r.option_index>=0&&r.option_index<byOpt.length) byOpt[r.option_index].push({name:r.name, me:r.user_id===uid}); } }
+
+  const resultsWrap = $('#results'); resultsWrap.innerHTML='';
+  OPTIONS.forEach((label, idx)=>{
+    const count = counts[idx]; const pct = total? Math.round(count/total*100):0;
+    const div = document.createElement('div'); div.className='bar';
+    div.innerHTML = `<div class="bar-fill" style="width:${pct}%"></div><div class="bar-label"><span>${label}</span><span>${pct}% (${count}표)</span></div>`;
+    resultsWrap.appendChild(div);
+    const ul = document.createElement('div'); ul.className='list';
+    const names = byOpt[idx].map(p=> p.me? `🌟 ${p.name}` : p.name);
+    ul.textContent = names.length? names.join(', ') : '—';
+    resultsWrap.appendChild(ul);
+  });
+  $('#meta').textContent = `총 ${total}표 · 이름 공개 기명 투표`;
+}
+
+boot();
+</script>
