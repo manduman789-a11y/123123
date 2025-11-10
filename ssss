@@ -96,8 +96,8 @@
 
 <script>
 /**************** 설정 ****************/
-const SUPABASE_URL = 'https://ahtrczqyoakxrlgqgqom.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFodHJjenF5b2FreHJsZ3FncW9tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NDc5NzEsImV4cCI6MjA3ODMyMzk3MX0.3oMNLnUK9-N52Mmb5-264sk7RXSqaFHg2jQMggLWhsQ';               
+const SUPABASE_URL = 'https://ahtrczqyoakxrlgqgqom.supabase.co'; // 사용자님의 Supabase URL
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFodHJjenF5b2FreHJsZ3FncW9tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NDc5NzEsImV4cCI6MjA3ODMyMzk3MX0.3oMNLnUK9-N52Mmb5-264sk7RXSqaFHg2jQMggLWhsQ'; // 사용자님의 Supabase ANON KEY
 let CURRENT_POLL_ID = null; // 동적 투표 ID를 저장할 변수
 const OPTIONS = ['월','화','수','목','금','토','일'];
 
@@ -116,7 +116,7 @@ function show(id, on=true){ const el = $(id); if(el) el.hidden = !on; }
 
 /**************** 초기 UI ****************/
 async function boot(){
-  // 1. 투표 메타 데이터 (현재 투표 ID)를 먼저 가져옵니다.
+  // 1. 투표 메타 데이터 (현재 투표 ID)를 먼저 가져옵니다. (주간 초기화 대응)
   const { data: meta, error: metaError } = await sb.from('poll_meta').select('current_poll_id').eq('id', 1).maybeSingle();
   if(metaError || !meta){
       console.error('투표 메타 데이터 로드 오류: ', metaError);
@@ -142,11 +142,11 @@ async function boot(){
 $('#signup').addEventListener('click', async ()=>{
   const name = $('#name').value.trim(); if(!name) return alert('이름을 입력하세요.');
   
-  // 🚨 중복 가입 방지 로직 제거 - 이제 이름만으로 바로 가입 요청
+  // 🚨 중복 가입 방지 로직 제거 - client_id를 사용하지 않고 새 사용자를 무조건 생성
   const { data, error } = await sb.from('users').insert({ name }).select('id').maybeSingle();
   if(error) return alert('가입 오류: '+error.message);
   
-  // 새 ID로 로컬 세션을 업데이트합니다. (기존 ID는 덮어써짐)
+  // 새 ID로 로컬 세션을 업데이트합니다.
   setUserId(data.id);
   await boot();
 });
@@ -193,10 +193,10 @@ async function onSubmit(e){
   const selected = Array.from(document.querySelectorAll('#options input[type=checkbox]:checked')).map(el=>Number(el.value));
   if(!selected.length){ alert('최소 1개 이상 선택하세요.'); $('#vote-form').addEventListener('submit', onSubmit, { once:true }); return; }
   const uid = getUserId(); if(!uid) return alert('가입이 필요합니다.');
-  // CURRENT_POLL_ID 사용
+  // CURRENT_POLL_ID 사용: 기존 표 삭제
   let { error: e1 } = await sb.from('votes').delete().eq('poll_id', CURRENT_POLL_ID).eq('user_id', uid);
   if(e1){ alert('초기화 오류: '+e1.message); $('#vote-form').addEventListener('submit', onSubmit, { once:true }); return; }
-  // CURRENT_POLL_ID 사용
+  // CURRENT_POLL_ID 사용: 새 표 삽입
   const rows = selected.map(i=>({ poll_id: CURRENT_POLL_ID, option_index: i, user_id: uid }));
   let { error: e2 } = await sb.from('votes').insert(rows);
   if(e2){ alert('저장 오류: '+e2.message); $('#vote-form').addEventListener('submit', onSubmit, { once:true }); return; }
@@ -234,9 +234,9 @@ async function renderResults(){
   $('#meta').textContent = `총 ${total}표 · 이름 공개 기명 투표`;
 }
 
-// 🚨 관리자 수동 초기화 함수 추가
+// 🚨 관리자 수동 초기화 함수
 async function handleManualReset(){
-  const result = confirm('⚠️ 관리자 초기화: 정말 투표를 초기화하시겠습니까?\n이 작업은 현재 투표 ID를 갱신하고 모든 표를 삭제합니다.\n(이 작업은 Supabase에서 관리자 권한이 필요합니다. 개발자 도구의 콘솔을 확인하세요.)');
+  const result = confirm('⚠️ 관리자 초기화: 정말 투표를 초기화하시겠습니까?\n이 작업은 현재 투표 ID를 갱신하고 모든 이전 표를 삭제합니다.\n(이 작업은 Supabase에서 관리자 권한이 필요합니다.)');
   if(!result) return;
   
   // Supabase RPC 함수 호출
@@ -244,7 +244,7 @@ async function handleManualReset(){
 
   if(error) {
     console.error('초기화 오류:', error);
-    alert('투표 초기화에 실패했습니다. Supabase Functions(reset_current_poll) 설정과 RLS 정책을 확인하세요: ' + error.message);
+    alert('투표 초기화에 실패했습니다. Supabase Functions 설정과 RLS 정책을 확인하세요: ' + error.message);
   } else {
     console.log('초기화 성공:', data);
     alert('투표가 초기화되고 새로운 투표 ID가 생성되었습니다. 페이지를 새로고침합니다.');
