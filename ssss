@@ -96,16 +96,16 @@
 
 <script>
 /**************** 설정 ****************/
-const SUPABASE_URL = 'https://ahtrczqyoakxrlgqgqom.supabase.co'; // 사용자님의 Supabase URL
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFodHJjenF5b2FreHJsZ3FncW9tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NDc5NzEsImV4cCI6MjA3ODMyMzk3MX0.3oMNLnUK9-N52Mmb5-264sk7RXSqaFHg2jQMggLWhsQ'; // 사용자님의 Supabase ANON KEY
-let CURRENT_POLL_ID = null; // 동적 투표 ID를 저장할 변수
+const SUPABASE_URL = 'https://ahtrczqyoakxrlgqgqom.supabase.co'; // TODO 교체
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFodHJjenF5b2FreHJsZ3FncW9tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NDc5NzEsImV4cCI6MjA3ODMyMzk3MX0.3oMNLnUK9-N52Mmb5-264sk7RXSqaFHg2jQMggLWhsQ';               // TODO 교체
+let CURRENT_POLL_ID = null; // 동적 투표 ID를 저장할 변수 (POLL_ID 대신 사용)
 const OPTIONS = ['월','화','수','목','금','토','일'];
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /**************** 로컬 세션 ****************/
 const LS_USER_ID = 'namedvote.user_id';
-// 🚨 중복 가입 방지용 client_id 로직 제거
+// 🚨 client_id 관련 함수 모두 제거됨
 function getUserId(){ return localStorage.getItem(LS_USER_ID); }
 function setUserId(id){ localStorage.setItem(LS_USER_ID, id); }
 function clearLocal(){ localStorage.removeItem(LS_USER_ID); }
@@ -116,7 +116,7 @@ function show(id, on=true){ const el = $(id); if(el) el.hidden = !on; }
 
 /**************** 초기 UI ****************/
 async function boot(){
-  // 1. 투표 메타 데이터 (현재 투표 ID)를 먼저 가져옵니다. (주간 초기화 대응)
+  // 1. 투표 메타 데이터 (현재 투표 ID)를 먼저 가져옵니다.
   const { data: meta, error: metaError } = await sb.from('poll_meta').select('current_poll_id').eq('id', 1).maybeSingle();
   if(metaError || !meta){
       console.error('투표 메타 데이터 로드 오류: ', metaError);
@@ -142,7 +142,7 @@ async function boot(){
 $('#signup').addEventListener('click', async ()=>{
   const name = $('#name').value.trim(); if(!name) return alert('이름을 입력하세요.');
   
-  // 🚨 중복 가입 방지 로직 제거 - client_id를 사용하지 않고 새 사용자를 무조건 생성
+  // 🚨 중복 가입 방지 로직 제거 (client_id 사용 안 함)
   const { data, error } = await sb.from('users').insert({ name }).select('id').maybeSingle();
   if(error) return alert('가입 오류: '+error.message);
   
